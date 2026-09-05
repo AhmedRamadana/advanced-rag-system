@@ -12,7 +12,7 @@ All source documents are in Arabic; the system is designed to answer questions i
 
 ## Goal
 
-Build a RAG system that doesn't treat every question the same way. A **Router** classifies each incoming question into one of three paths (`simple` / `basic_rag` / `advanced_rag`), and Advanced RAG techniques (Query Understanding + Retrieval Improvement) are only applied when a question actually needs them — with accurate per-question cost tracking and evaluation.
+Build a RAG system that doesn't treat every question the same way. A **Router** classifies each incoming question into one of three paths (`simple` / `basic_rag` / `advanced_rag`), and Advanced RAG techniques (Query Understanding + Retrieval Improvement) are only applied when a question actually needs them — with per-question cost tracking and evaluation.
 
 ---
 
@@ -28,13 +28,26 @@ advanced-rag-system/
 │   ├── ingestion/
 │   │   ├── loader.py                 → Document Loading (pdfplumber + Arabic RTL text repair)
 │   │   ├── chunker.py                → Text Chunking (recursive, structure-aware splitting)
-│   │   └── vectorstore_builder.py    → Embedding (gemini-embedding-001) + ChromaDB storage
+│   │   ├── vectorstore_builder.py    → Embedding (gemini-embedding-001) + ChromaDB storage
+│   │   └── backfill_dates.py         → Utility for populating/fixing document-level date metadata
 │   ├── retrieval/
-│   │   └── retriever.py              → Retrieval Strategy (semantic similarity search)
+│   │   ├── retriever.py              → Retrieval Strategy (semantic similarity search)
+│   │   ├── reranker.py               → Retrieval Improvement: reordering retrieved chunks by relevance
+│   │   ├── compression.py            → Retrieval Improvement: contextual compression of retrieved chunks
+│   │   └── crag.py                   → Retrieval Improvement: Corrective RAG (self-correction on weak retrieval)
+│   ├── query_transform/
+│   │   ├── rewriter.py               → Query Understanding: query rewriting
+│   │   ├── multi_query.py            → Query Understanding: multi-query generation
+│   │   ├── decomposition.py          → Query Understanding: sub-question decomposition
+│   │   ├── hyde.py                   → Query Understanding: Hypothetical Document Embeddings
+│   │   └── self_query.py             → Query Understanding: metadata-filtered querying
 │   ├── generation/
 │   │   └── generator.py              → LLM Integration + Response Generation (anti-hallucination prompt)
 │   ├── routing/
 │   │   └── router.py                 → Classifies each question before any retrieval happens
+│   ├── evaluation/
+│   │   ├── judge.py                  → LLM-as-judge scoring (Context Relevance, Faithfulness, Answer Relevance, Correctness)
+│   │   └── metrics.py                → Metric definitions/aggregation for the evaluation results
 │   ├── llm_client.py                 → Shared wrapper for every Gemini call (tracks tokens/cost/latency)
 │   └── test_connection.py            → Quick sanity check for the API key and model names
 ├── vectorstore/                      → ChromaDB persistent collection (built automatically, not edited by hand)
@@ -74,11 +87,11 @@ python -m src.ingestion.vectorstore_builder
 # Test retrieval only
 python -m src.retrieval.retriever
 
-# Test the full pipeline (retrieval + generation)
-python -m src.generation.generator
-
 # Test the router
 python -m src.routing.router
+
+# Test the full pipeline (retrieval + generation)
+python -m src.generation.generator
 ```
 
 ---
@@ -90,3 +103,4 @@ python -m src.routing.router
 - **gemini-embedding-001**: Google's current stable embedding model, with explicit support for Arabic among 100+ languages (the older text-embedding-004 has been retired).
 - **Two-tier model strategy**: `LIGHT_MODEL` (cheap, fast) is used for routing, query-transformation techniques, and the evaluation judge; `GENERATION_MODEL` (stronger, more expensive) is reserved for final answer generation only — keeping cost proportional to task complexity.
 - **Centralized `llm_client.py`**: every LLM call in the project (router, rewriter, generator, judge) goes through this single wrapper, so token/cost/latency accounting stays accurate and no call is ever silently left out of the cost total.
+- **Router-first design**: the router runs before any retrieval, deciding whether a question needs the corpus at all, a single retrieval pass, or one/more Advanced RAG techniques — avoiding forcing every question through every technique.
