@@ -58,6 +58,10 @@ Strict rules you must always follow:
 5. Be concise and directly address the question - do not repeat the
    context verbatim."""
 
+SIMPLE_SYSTEM_INSTRUCTION = """You are a knowledgeable, helpful assistant. Answer the question directly
+and accurately using your own general knowledge. Be concise and clear.
+Answer in the same language the question was asked in."""
+
 
 @dataclass
 class GenerationResult:
@@ -99,6 +103,8 @@ def generate_answer(question: str, retrieved_chunks: list[RetrievedChunk]) -> Ge
     """
     Component 6+7 entry point: given a question and its retrieved
     chunks, build the anti-hallucination prompt and get the final answer.
+    Use this for questions routed to "basic_rag" or "advanced_rag" -
+    i.e. questions that DID go through retrieval.
     """
     context = format_context(retrieved_chunks)
     prompt = build_prompt(question, context)
@@ -118,6 +124,33 @@ def generate_answer(question: str, retrieved_chunks: list[RetrievedChunk]) -> Ge
         answer=result.text,
         sources=sources,
         context_used=context,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        cost_usd=result.cost_usd,
+        latency_seconds=result.latency_seconds,
+    )
+
+
+def generate_simple_answer(question: str) -> GenerationResult:
+    """
+    For questions routed to "simple" by the router - i.e. questions that
+    do NOT need retrieval at all (e.g. general RAG-theory questions with
+    no answer in our corpus). Uses an unrestricted system instruction so
+    the model answers from its own general knowledge, instead of the
+    context-only rule in generate_answer() which would incorrectly force
+    it to say "insufficient information" for every such question (since
+    there would be no context at all to work with).
+    """
+    result = llm_client.generate(
+        prompt=question,
+        system_instruction=SIMPLE_SYSTEM_INSTRUCTION,
+        temperature=0.3,
+    )
+
+    return GenerationResult(
+        answer=result.text,
+        sources=[],
+        context_used="",
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         cost_usd=result.cost_usd,

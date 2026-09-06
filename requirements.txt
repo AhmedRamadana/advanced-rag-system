@@ -5,3 +5,4 @@ python-dotenv==1.0.1
 tiktoken==0.8.0
 pandas==2.2.3
 tenacity==9.0.0
+streamlit==1.40.2

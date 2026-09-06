@@ -1,121 +1,82 @@
-"""
-Component 5/8: Retrieval Strategy
+﻿"""
+Query Transformation Technique: Rewriting
 
 Why we need it:
-This is where a user's question actually gets connected to our stored
-content for the first time. Everything before this (loading, chunking,
-embedding, storing) was preparation; this is the step that turns a raw
-question into "here are the N most semantically relevant chunks from
-the corpus."
+A question retrieval sees is compared, as a vector, against our stored
+chunks. If the question is phrased conversationally, with filler words,
+vague pronouns, or unclear structure, its embedding drifts away from
+the clean, formal wording used in the actual procedure manuals - even
+though a human would easily understand what's being asked. Rewriting
+fixes this by asking the LLM to restate the question in a clear,
+keyword-focused way BEFORE we embed it and search with it.
 
-How similarity search works (in plain terms):
-We convert the question into a vector using the SAME embedding model
-we used to store the chunks. ChromaDB then compares that query vector
-against all 284 stored vectors and returns the ones that are
-mathematically "closest" (most similar in meaning), not the ones that
-share the most literal words. This is what lets a question phrased
-differently from the manual's exact wording still find the right chunk.
+Why an LLM does this (not a simple text-cleaning script):
+Resolving vague references into explicit, searchable terms requires
+understanding intent, not just removing stopwords.
 
-Why task_type="retrieval_query" here (different from storage):
-When we stored chunks, we used task_type="retrieval_document". Google's
-embedding model produces slightly different (optimized) vectors
-depending on whether the text is something to be searched (a query) or
-something to be found (a document). Using the wrong task_type for either
-side measurably reduces retrieval quality, even though the code would
-still run without errors - this is a common, easy-to-miss mistake.
-
-If we skipped this step / got it wrong:
-Without it, there is no way to find relevant content for a question at
-all. If we get task_type wrong, the code runs and returns *something*,
-but retrieval accuracy silently degrades - the kind of subtle bug that
-would only show up later as unexplained low "Context Relevance" scores
-in evaluation, with no obvious error message pointing to the cause.
+If we skipped this step:
+A vaguely or colloquially phrased question would be embedded and
+searched exactly as typed, potentially missing the right chunk even
+though the underlying information intent was actually answerable.
 """
 
-import os
 import sys
 from pathlib import Path
 from dataclasses import dataclass
 
-os.environ["ANONYMIZED_TELEMETRY"] = "False"
-
-import chromadb
-import google.generativeai as genai
-from google.api_core.exceptions import ResourceExhausted
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-
 sys.path.append(str(Path(__file__).resolve().parents[2]))
-import config
-from src.ingestion.vectorstore_builder import COLLECTION_NAME
+from src import llm_client
 
-genai.configure(api_key=config.GEMINI_API_KEY)
+REWRITER_SYSTEM_INSTRUCTION = """You are a query rewriting assistant for a document retrieval system.
+Rewrite the user's question into a single, clear, keyword-focused
+search query optimized for semantic retrieval, while preserving its
+original meaning and language.
+
+Rules:
+- Resolve vague pronouns or implicit references into explicit terms.
+- Remove conversational filler ("so like", "can you tell me", etc.).
+- Keep it as a single, well-formed question or query phrase.
+- Do not answer the question - only rewrite it.
+- Return ONLY the rewritten query text, with no extra explanation, labels, or quotation marks."""
 
 
 @dataclass
-class RetrievedChunk:
-    """One search result: the chunk text plus its metadata and how close it was to the query."""
-    chunk_id: str      # unique identifier, used to de-duplicate results across multiple searches
-    text: str
-    metadata: dict
-    distance: float   # lower = more similar (ChromaDB default is a distance, not a similarity score)
+class RewriteResult:
+    original_query: str
+    rewritten_query: str
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+    latency_seconds: float
 
 
-@retry(
-    retry=retry_if_exception_type(ResourceExhausted),
-    wait=wait_exponential(multiplier=2, min=5, max=60),
-    stop=stop_after_attempt(6),
-)
-def embed_query(query: str) -> list[float]:
-    """Embed a user question using the query-optimized mode (see module docstring)."""
-    result = genai.embed_content(
-        model=config.EMBEDDING_MODEL,
-        content=query,
-        task_type="retrieval_query",
-    )
-    return result["embedding"]
-
-
-def get_collection():
-    """Connect to the persistent ChromaDB collection we built earlier."""
-    client = chromadb.PersistentClient(path=str(config.VECTORSTORE_DIR))
-    return client.get_collection(name=COLLECTION_NAME)
-
-
-def retrieve(query: str, top_k: int = config.TOP_K) -> list[RetrievedChunk]:
-    """
-    Core retrieval function: given a question, return the top_k most
-    semantically similar chunks stored in the vector database.
-    """
-    collection = get_collection()
-    query_vector = embed_query(query)
-
-    results = collection.query(
-        query_embeddings=[query_vector],
-        n_results=top_k,
+def rewrite_query(question: str) -> RewriteResult:
+    """Rewrite a question into a clearer, retrieval-friendly form."""
+    llm_result = llm_client.generate(
+        prompt=f"Original question: {question}",
+        system_instruction=REWRITER_SYSTEM_INSTRUCTION,
+        temperature=0.2,
     )
 
-    retrieved = []
-    for chunk_id, text, metadata, distance in zip(
-        results["ids"][0],
-        results["documents"][0],
-        results["metadatas"][0],
-        results["distances"][0],
-    ):
-        retrieved.append(
-            RetrievedChunk(chunk_id=chunk_id, text=text, metadata=metadata, distance=distance)
-        )
-
-    return retrieved
+    return RewriteResult(
+        original_query=question,
+        rewritten_query=llm_result.text.strip().strip('"'),
+        input_tokens=llm_result.input_tokens,
+        output_tokens=llm_result.output_tokens,
+        cost_usd=llm_result.cost_usd,
+        latency_seconds=llm_result.latency_seconds,
+    )
 
 
 if __name__ == "__main__":
-    # Quick manual test with a sample question from the corpus's domain.
-    test_question = "ما هي إجراءات الجرد السنوي لمستودعات القرطاسية؟"
-    print(f"Question: {test_question}\n")
+    test_questions = [
+        "so like, what do you even do when that alarm thing goes off, all the steps and stuff?",
+        "who has to sign off on it when they want to get rid of old stuff nobody uses anymore in the warehouse?",
+    ]
 
-    results = retrieve(test_question, top_k=3)
-    for i, r in enumerate(results, start=1):
-        print(f"--- Result {i} (distance={r.distance:.4f}) ---")
-        print(f"Source: {r.metadata['source_file']}, page {r.metadata['page_number']}")
-        print(r.text[:300])
+    for q in test_questions:
+        result = rewrite_query(q)
+        print(f"Original:  {result.original_query}")
+        print(f"Rewritten: {result.rewritten_query}")
+        print(f"Cost:  | Latency: {result.latency_seconds}s")
         print()

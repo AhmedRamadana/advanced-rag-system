@@ -21,8 +21,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # proved unreliable on the free tier (repeated rate-limit errors causing
 # 2-3 minute delays per call, confirmed via retry logging). Given the
 # project deadline, we prioritized reliability over marginal cost
-# savings and standardized on gemini-3.6-flash everywhere.
-GENERATION_MODEL = "gemini-3.6-flash"
+# savings and standardized on gemini-3.5-flash-lite everywhere.
+GENERATION_MODEL = "gemini-3.5-flash-lite"
 EMBEDDING_MODEL = "models/gemini-embedding-001"
 
 # ---- Paths ----
@@ -39,7 +39,7 @@ CHUNK_OVERLAP = 150     # overlap between consecutive chunks to preserve context
 # ---- Retrieval ----
 TOP_K = 5               # number of chunks retrieved per query
 
-# ---- Pricing (USD per 1M tokens) - gemini-3.6-flash ----
-PRICE_INPUT_PER_1M = 1.50
-PRICE_OUTPUT_PER_1M = 7.50
+# ---- Pricing (USD per 1M tokens) - gemini-3.5-flash-lite ----
+PRICE_INPUT_PER_1M = 0.30
+PRICE_OUTPUT_PER_1M = 2.50
 PRICE_EMBEDDING_PER_1M = 0.15
